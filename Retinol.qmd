@@ -1,0 +1,360 @@
+---
+title: "Determinants of Plasma Retinol"
+author: "THM"
+format: 
+  html:
+    embed-resources: true
+    toc: true
+    code-tools: true
+
+csl: ecology.csl
+
+editor: visual
+bibliography: references.bib
+---
+
+```{r}
+#| label: SetUp
+#| message: FALSE
+#| echo: FALSE
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE
+  ) 
+
+library(MASS)
+library(AICcmodavg)
+library(car)
+library(ggfortify)
+library(patchwork)
+library(broom)
+library(latex2exp)       
+library(kableExtra)
+library(tidyverse)
+
+options(knitr.kable.NA = '')
+```
+
+<!--# This chunk is a work-around to allow left-aligned table captions -->
+
+```{=html}
+<style type="text/css">
+caption, .table-caption {
+  text-align: left;
+}
+</style>
+```
+## Background for the data:
+
+These data were provided by: Therese Stukel, Darmouth Hitchcock Medical Center, and are a subset of observations from a larger data set analyzed and reported on by @Nierenberg.etal1989. Observational studies have suggested that low dietary intake or low plasma concentrations of retinol, beta-carotene, or other carotenoids might be associated with increased risk of developing certain types of cancer. However, relatively few studies have investigated the determinants of plasma concentrations of these micronutrients. @Nierenberg.etal1989 designed a cross-sectional study to investigate the relationship between personal characteristics and dietary factors, and plasma concentrations of retinol, beta-carotene and other carotenoids (@tbl-Vars). Study subjects (N = 315) were patients who had an elective surgical procedure during a three-year period to biopsy or remove a lesion of the lung, colon, breast, skin, ovary or uterus that was found to be non-cancerous.
+
+| Variable    | Description                                               |
+|-------------|-----------------------------------------------------------|
+| AGE         | Age in years                                              |
+| SEX         | Sex (1 = male, 2 = female)                                |
+| SMOKSTAT    | Smoking status (1=Never, 2=Former, 3=Current Smoker)      |
+| QUETELET    | Quetelet $({weight} \big/ {height^2})$                    |
+| VITUSE      | Vitamin Use (1=Yes, fairly often, 2=Yes, not often, 3=No) |
+| CALORIES    | Number of calories consumed per day $(cal \big/ d)$       |
+| FAT         | Fat consumed per day $(g)$                                |
+| FIBER       | Fiber consumed per day $(g)$                              |
+| ALCOHOL     | Number of alcoholic drinks consumed per week.             |
+| CHOLESTEROL | Cholesterol consumed $(mg \big/ d)$                       |
+| BETADIET    | Dietary beta-carotene consumed $(\mu g \big/ d)$          |
+| RETDIET     | Dietary retinol consumed $(\mu g \big/ d)$                |
+| BETAPLASMA  | Plasma beta-carotene $(ng \big/ ml)$                      |
+| RETPLASMA   | Plasma Retinol $(ng \big/ ml)$                            |
+
+: Variables labels and their explanation: {#tbl-Vars}
+
+```{r}
+#| label: dataImport
+
+retData <- read_csv(
+  "retinol.csv",
+  show_col_types = FALSE,
+  comment = "#"
+  )
+
+# note that three variables in the data set used integers as classification
+# variables. I will declare these to be factors, otherwise R will use these
+# numbers as continuous numeric measures.
+
+retData$SEX <- factor(
+  retData$SEX,
+  levels = c(1,2),
+  labels = c("male", "female")
+  )
+
+retData$SMOKSTAT <- factor(
+  retData$SMOKSTAT,
+  levels = c(1, 2, 3),
+  labels = c("Never", "Former", "Current")
+  )
+
+retData$VITUSE <- factor(
+  retData$VITUSE,
+  levels = c(1, 2, 3),
+  labels = c("Yes", "Infrequent", "No")
+  )
+
+retData <- retData |>
+  rowid_to_column(var = "rowid") # allows me to quickly identify observations
+
+```
+
+## Statistical Methods:
+
+I have used linear modeling to explore 1) which, if any, of the measured variables are strongly correlated with plasma retinol levels, and a model selection approach using the Akaike information criterion (AIC) to 2) develop a parsimonious prediction model. Data manipulation and graphics were produced using functions provided in the tidyverse package [@tidyverse]. All linear models were estimated in R, using the lm() function [@base] and assumptions were checked using the plot.lm() function. Multicollinearity was checked using the vif() function from the car package [@car]. Model selection using AICc was done with the aictab() function from the AICcmodavg package [@AICcmodavg].
+
+While it is possible (and common) to include factor variables in multiple regressions, I have removed `SEX`, `SMOKSTAT`, and `VITUSE` from the model. This was just to simplify the model to only continuous variables.
+
+### The full model and assumptions checks:
+
+```{r}
+#| label: fig-fullMod
+#| fig-cap: "Visual assumption checks for the full model."
+
+fullMod <- lm(
+  RETPLASMA ~
+    AGE +
+    # SEX +
+    # SMOKSTAT +
+    QUETELET +
+    # VITUSE +
+    CALORIES +
+    FAT +
+    FIBER +
+    ALCOHOL +
+    CHOLESTEROL +
+    BETADIET +
+    RETDIET,
+  data = retData
+)
+
+par(mfrow = c(2,2))
+plot(fullMod)
+```
+
+While most of the visual diagnostics for model fit, normality of the residuals, and homogeneity of variances are okay, in the leverage plot, observation 62 is identified as outlier. Upon inspection of the data, we find that patient 62's alcohol intake was recorded to be `r retData$ALCOHOL[62]` alcoholic drinks per week while median for the other patients was only `r median(retData$ALCOHOL[-62])` drinks per week (interquartile range = `r IQR(retData$ALCOHOL[-62])`). I have removed patient 62 from the rest of the analysis.
+
+```{r}
+#| label: tbl-modFull
+#| tbl-cap: "Full model coefficient estimates and variance inflation factors (VIF)"
+
+modFull <- lm(
+  RETPLASMA ~
+    AGE +
+    # SEX +
+    # SMOKSTAT +
+    QUETELET +
+    # VITUSE +
+    CALORIES +
+    FAT +
+    FIBER +
+    ALCOHOL +
+    CHOLESTEROL +
+    BETADIET +
+    RETDIET,
+  data = retData[-62,]
+)
+
+tab <- data.frame(
+  cbind(
+    summary(modFull)$coefficients,
+    # adds "NA" as the first row (after the 0 row) for the intercept
+    append(vif(modFull), values = NA, after = 0) 
+    )
+  ) 
+
+kbl(tab,
+    col.names = c(
+      "Coefficient",
+      "SE",
+      "t",
+      "P-value",
+      "VIF"
+      ),
+    digits = 3
+    ) |>
+  kable_classic()
+
+```
+
+## Model Selection & Results:
+
+`CALORIES` and `FAT` have large variance inflation factors (@tbl-modFull) indicating collinearity. It isn't surprising that fat intake and calorie intake would be correlated. Below, I have produced two reduced models, one removing calorie intake from the model and the other removing fat intake. I have used AICc to determine which of the reduced models loses the least amount of information.
+
+```{r}
+#| label: tbl-AICtab
+#| tbl-cap: "Summary AICc values for the three models: modFull = all continuous variables included; modNOcal = model with `CALORIES` removed; modNOfat = models with `FAT` removed." 
+
+
+modNOcal <- lm(
+  RETPLASMA ~
+    AGE +
+    # SEX +
+    # SMOKSTAT +
+    QUETELET +
+    # VITUSE +
+    # CALORIES +
+    FAT +
+    FIBER +
+    ALCOHOL +
+    CHOLESTEROL +
+    BETADIET +
+    RETDIET,
+  data = retData[-62,]
+)
+
+modNOfat <- lm(
+  RETPLASMA ~
+    AGE +
+    # SEX +
+    # SMOKSTAT +
+    QUETELET +
+    # VITUSE +
+    CALORIES +
+    # FAT +
+    FIBER +
+    ALCOHOL +
+    CHOLESTEROL +
+    BETADIET +
+    RETDIET,
+  data = retData[-62,]
+)
+
+
+AICtab <- aictab(
+  cand.set = list(
+    modFull,
+    modNOcal,
+    modNOfat
+    ),
+  modnames = c(
+    "modFull",
+    "modNOcal",
+    "modNOfat"
+    )
+  )
+
+kbl(
+  AICtab
+) |>
+  kable_classic()
+```
+
+The model with calorie intake removed produced an AICc very similar to that of the full model (@tbl-AICtab). This model results in acceptable variance inflation factors (@tbl-modNOcal_summary). The only statistically significant coefficients in the model were patient age and alcohol consumption.
+
+```{r}
+#| label: tbl-modNOcal_summary
+#| tbl-cap: "Coefficient estimtes and variance inflation factors for the  reduced model with `CALORIES` removed."
+
+tabNOcal <- data.frame(
+  cbind(
+    summary(modNOcal)$coefficients,
+    # adds "NA" as the first row (after the 0 row) for the intercept
+    append(vif(modNOcal), values = NA, after = 0) 
+    )
+  ) 
+
+kbl(tabNOcal,
+    col.names = c(
+      "Coefficient",
+      "SE",
+      "t",
+      "P-value",
+      "VIF"
+      ),
+    digits = 3
+    ) |>
+  kable_classic()
+
+```
+
+## Most parsimonious model:
+
+If we are most interested in finding an economical predictive model. We may opt for a step-wise model selection algorithm. Here I have used the stepAIC() function from the MASS package [@MASS]. This function retains variables in the model that decrease AIC for the model and drops those that result in increases in AIC when added.
+
+```{r}
+#| label: tbl-modPAR
+#| tbl-cap: "Summary of the model found through step-wise regression to produce an economical parsimonious prediction model."
+
+modPAR <- stepAIC(
+  modFull, 
+  direction = "both",
+  trace = FALSE
+  )
+
+tabPAR <- data.frame(
+  cbind(
+    summary(modPAR)$coefficients,
+    # adds "NA" as the first row (after the 0 row) for the intercept
+    append(vif(modPAR), values = NA, after = 0) 
+    )
+  ) 
+
+kbl(tabPAR,
+    col.names = c(
+      "Coefficient",
+      "SE",
+      "t",
+      "P-value",
+      "VIF"
+      ),
+    digits = 3
+    ) |>
+  kable_classic()
+
+
+```
+
+While I have reported the variance inflation factors for the model selected by the step-wise regression algorithm (@tbl-modPAR), we can safely ignore the collinearity because this model was developed purely for prediction and not for hypothesis testing. You should also ignore the p-values (see section 6.1.15 in @Quinn.Keough2002).
+
+## Hierarchical Partitioning:
+
+@Quinn.Keough2002 argue, in section 6.1.16, that hierarchical partitioning as described by @chevan1991 is the best approach to identify important descriptor variables. Hierarchical partitioning uses all possible models and averages the improvement in fit for each predictor variable, both independently and jointly, across the models. The hier.part package [@hier.part] provides the algorithm developed by [@chevan1991].
+
+```{r}
+#| label: hierMod
+#| fig-show: "hide"
+#| message: false
+#| results: "hide"
+
+response <- retData$RETPLASMA[-62] # vector containing the response variable
+
+predictors <- retData[-62,-c(1,3,4,6,15)]
+
+hierMod <- hier.part::hier.part(
+  response, 
+  predictors,
+  family = "gaussian",
+  gof = "Rsqu")
+
+
+```
+
+```{r}
+#| label: tbl-hierMod
+#| tbl-cap: "Summary of hierarchical partitioning."
+
+kbl(
+  hierMod$IJ,
+  col.names = c(
+    "Independently",
+    "Jointly",
+    "Total"
+    ),
+  digits = 3,
+  align = "ccr"
+  ) |>
+  kable_classic(full = FALSE) |>
+  add_header_above(c(" ", "Contribution of Predictor" = 2, " "))
+
+```
+
+Patient age and alcohol intake were identified as the predictor variables most strongly directly correlated with plasma retinol (@tbl-hierMod) and in conjunction with their association with other predictor variables. Note however that this method is not a model selection approach, nor is it a hypothesis testing approach. It merely indicates which predictor variables are most strongly correlated with the response variable.
+
+## References:
